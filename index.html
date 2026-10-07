@@ -36,6 +36,7 @@
   .idbox small { display:block; color:var(--muted); font-size:12px; letter-spacing:.6px; text-transform:uppercase; }
   .id { font-size:30px; font-weight:800; color:var(--green-dark); letter-spacing:1px; word-break:break-all; margin-top:4px; }
   .err { color:var(--err); margin-top:12px; font-size:14px; }
+  .diag { text-align:center; font-size:11px; color:var(--muted); margin:14px 0 4px; word-break:break-word; }
   .hide { display:none !important; }
 </style>
 </head>
@@ -55,7 +56,7 @@
     <label>Event passcode</label>
     <input id="code" required maxlength="40" autocapitalize="off">
     <div class="hint">Ask the staff at the registration table.</div>
-    <button id="gbtn" type="submit" disabled>Loading...</button>
+    <button id="gbtn" type="submit">Continue</button>
     <div id="gerr" class="err hide"></div>
   </form>
 
@@ -88,9 +89,11 @@
     <label>Mobile number</label>
     <input id="mobile" type="tel" inputmode="tel" required maxlength="20" placeholder="09171234567">
     <div class="hint">Student's or parent/guardian's number, so we can contact you if there is a problem.</div>
-    <button id="btn" type="submit" disabled>Loading...</button>
+    <button id="btn" type="submit">Register</button>
     <div id="err" class="err hide"></div>
   </form>
+
+  <div id="ver" class="diag"></div>
 
   <!-- 3. result -->
   <div id="done" class="card done hide">
@@ -104,8 +107,17 @@
 
 <script>
   var $ = function (id) { return document.getElementById(id); };
-  var opts = { schools: { Elementary: [], Secondary: [] }, grades: { Elementary: [], Secondary: [] } };
+  // Built-in copy of the lists, so the dropdowns work instantly even on a slow connection.
+  // The page still asks the server in the background and switches to the live list if it differs.
+  var EMBEDDED_OPTIONS = {"schools":{"Elementary":["Alangilan Central Elementary School","Ambulong Elementary School","Bagong Silang Elementary School","Balagtas Elementary School","Balete Elementary School","Balete Reloc Elementary School","Banaba Center Elementary School","Banaba East Elementary School","Banaba South Elementary School","Banaba West Elementary School","Batangas City South Central Elem. School","BC East Elementary Schools","Bilogo Elementary School","Bolbok Elementary School","Bucal Elementary School","Calicanto Elementary School","Concepcion Elementary School","Conde Itaas Elementary School","Conde Labac Elementary School","Cumba Elementary School","Dao Elementary School","Dela Paz Itaas Elementary School","Dela Paz Proper Elementary School","Dela Paz Pulot Elementary School","Dumantay Elementary School","Dumuclay Elementary School","Eulalia Talban Ebora Mem. Elem. School","Guinto Elementary School","Gulod Elementary School","Haligue Kanluran Elementary School","Haligue Silangan Elementary School","Ilijan Elementary School","JC Pastor Mem. Elementary School","Julian A. Pastor Mem. Elementary School","Katandala Elementary School","Kumintang Elementary School","Libjo Elementary School","Lilinggiwan Elementary School","Liponpon Elementary School","Mabacong Elementary School","Mahabang Dahilig Elementary School","Mahacot Elementary School","Malibayo Elementary School","Malitam Elementary School","Maruclap Elementary School","Melecio A. Arceo Mem. Elementary School","Niño Jesus Elementary School","Pagkilatan Elementary School","Paharang Elementary School","Pallocan East Elementary School","Parang Cueva Elementary School","Parang Elementary School","Payiran Bilao Elementary School","Pinamucan Elementary School","Pinamucan Ibaba Elementary School","Pit Elementary School","Sampaga Elementary School","San Agapito Elementary School","San Agustin Kanluran Elementary School","San Agustin Silangan Elementary School","San Isidro Elementary School","San Jose Sico Elementary School","San Miguel Elementary School","San Pedro Elementary School","Simlong Elementary School","Sirang Lupa Elementary School","Sorosoro Elementary School","Sta. Clara Elementary School","Sta. Rita Aplaya Elementary School","Sta. Rita Elementary School","Sto. Domingo Elementary School","Sto. Niño Elementary School","Tabangao Elementary School","Talahib Pandayan Elementary School","Talahib Payapa Elementary School","Talumpok Proper Elementary School","Talumpok Silangan Elementary School","Tibig Elementary School","Tinga Itaas Elementary School","Tinga Labac Elementary School","Tulo I Elementary School","Tulo II Elementary School","Wawa Elementary School"],"Secondary":["Alangilan Senior High School","Balete Integrated School","Banaba West Integrated School","Batangas City High School for the Arts","Batangas City Integrated High School","Batangas City South Senior High School","Conde Labac Integrated School","Gulod Senior High School","Haligue Silangan National High School","Libjo National High School","Mahabang Dahilig Senior High School","Malitam National High School","NAVERA Mem. Integrated School","Paharang Integrated School","Pedro S. Tolentino Mem. Integrated School","Pinamukan Integrated School","San Agapito Integrated High School","San Agustin Integrated School","San Antonio National High School","Sta. Rita National High School","Sto. Niño National High School","Tabangao Integrated School","Talahib Pandayan National High School","Talumpok Integrated School","Tinga Sorosoro Integrated School"]},"grades":{"Elementary":["Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6"],"Secondary":["Grade 7","Grade 8","Grade 9","Grade 10","Grade 11","Grade 12"]},"requirePasscode":false};
+  var opts = EMBEDDED_OPTIONS;
   var passcode = "";
+  var VERSION = "v5.3";
+  var diag = { f: "", j: "" };
+  function showDiag() {
+    $("ver").textContent = VERSION + (window.google && google.script && google.script.run ? " \u00b7 apps-script" : " \u00b7 hosted") +
+      (diag.f ? " \u00b7 fetch: " + diag.f : "") + (diag.j ? " \u00b7 jsonp: " + diag.j : "");
+  }
 
   // WHEN HOSTED OUTSIDE GOOGLE: paste your Apps Script web app URL (ends in /exec) between the quotes.
   // Inside Apps Script this is ignored.
@@ -154,7 +166,7 @@
     })
       .then(function (res) { return res.json(); })
       .then(function (j) { clearTimeout(timer); onOk(j); })
-      .catch(function (e) { clearTimeout(timer); onFail(e); });
+      .catch(function (e) { clearTimeout(timer); diag.f = (e && e.name === "AbortError") ? "timeout" : "blocked/failed"; onFail(e); });
   }
 
   function viaJsonp(action, payload, onOk, onFail) {
@@ -162,34 +174,51 @@
     var s = document.createElement("script");
     function finish(fn, arg) {
       if (done) return; done = true; clearTimeout(t);
+      window.removeEventListener("error", onWinErr, true);
       try { delete window[cb]; } catch (e) { window[cb] = undefined; }
       if (s.parentNode) s.parentNode.removeChild(s);
       fn(arg);
     }
+    function onWinErr(ev) {
+      // a load error on our script, or a parse error because the server sent a web page instead of data
+      if (ev && ev.target === s) { diag.j = "load error"; finish(onFail, new Error("jsonp load error")); }
+      else if (ev && /script error|unexpected token|syntaxerror/i.test(String(ev.message || ""))) { diag.j = "server sent a web page, not data"; finish(onFail, new Error("jsonp bad response")); }
+    }
+    window.addEventListener("error", onWinErr, true);
     window[cb] = function (j) { finish(onOk, j); };
     var q = "action=" + encodeURIComponent(action) + "&callback=" + cb;
     if (action === "submit") q += "&data=" + encodeURIComponent(JSON.stringify(payload));
     if (action === "checkPasscode") q += "&code=" + encodeURIComponent(payload.code);
-    s.onerror = function () { finish(onFail, new Error("jsonp failed")); };
-    t = setTimeout(function () { finish(onFail, new Error("jsonp timeout")); }, 25000);
+    t = setTimeout(function () { diag.j = "timeout"; finish(onFail, new Error("jsonp timeout")); }, action === "options" ? 12000 : 25000);
     s.src = API_URL + "?" + q;
     document.head.appendChild(s);
   }
 
   function loadOptions(n) {
     callApi("options", null, function (o) {
-      if (!o || !o.schools) return retryLoad(n);
-      opts = o;
-      if (o.requirePasscode) { $("f").classList.add("hide"); $("gate").classList.remove("hide"); }
-      $("gbtn").disabled = false; $("gbtn").textContent = "Continue";
-      $("btn").disabled = false; $("btn").textContent = "Register";
+      if (!o || !o.schools || !o.grades) return retryLoad(n);
+      applyOptions(o);
+      if (o.requirePasscode && !passcode) { $("f").classList.add("hide"); $("gate").classList.remove("hide"); }
     }, function () { retryLoad(n); });
   }
   function retryLoad(n) {
-    if (n < 4) return setTimeout(function () { loadOptions(n + 1); }, 1200 * (n + 1));
-    var m = !IN_GAS && !API_URL ? "Page not configured (API_URL)." : "Could not load. Refresh the page.";
-    $("btn").textContent = m; $("gbtn").textContent = m;
+    if (n < 2) return setTimeout(function () { loadOptions(n + 1); }, 1200 * (n + 1));
+    showDiag(); // silent for students: the built-in lists keep working
   }
+  // switch to the live lists, keeping whatever the student has already picked
+  function applyOptions(o) {
+    opts = { schools: o.schools, grades: o.grades, requirePasscode: !!o.requirePasscode };
+    var school = $("school").value, grade = $("grade").value;
+    fillLevelLists($("level").value);
+    if (school) $("school").value = school;
+    if (grade) $("grade").value = grade;
+  }
+  function fillLevelLists(lv) {
+    var list = (opts.schools[lv] || []).slice().sort(function (a, b) { return a.localeCompare(b); });
+    fill($("school"), list, "Select level first");
+    fill($("grade"), opts.grades[lv] || [], "Select level first");
+  }
+  showDiag();
   loadOptions(0);
 
   function fill(sel, list, emptyText) {
@@ -218,11 +247,10 @@
 
   /* level drives school + grade lists */
   $("level").addEventListener("change", function () {
-    fill($("school"), opts.schools[this.value] || [], "Select level first");
-    fill($("grade"), opts.grades[this.value] || [], "Select level first");
+    fillLevelLists(this.value);
   });
 
-  function showError(msg) { var e = $("err"); e.textContent = msg; e.classList.remove("hide"); $("btn").disabled = false; $("btn").textContent = "Register"; }
+  function showError(msg) { showDiag(); var e = $("err"); e.textContent = msg; e.classList.remove("hide"); $("btn").disabled = false; $("btn").textContent = "Register"; }
 
   function attempt(data, n) {
     callApi("submit", data, function (r) {
@@ -243,7 +271,9 @@
   $("f").addEventListener("submit", function (ev) {
     ev.preventDefault();
     $("err").classList.add("hide");
+    if (!IN_GAS && !API_URL) return showError("Page not configured (API_URL).");
     $("btn").disabled = true; $("btn").textContent = "Submitting...";
+    setTimeout(function () { if ($("btn").disabled) $("btn").textContent = "Still working... please wait"; }, 6000);
     attempt({
       requestId: newReqId(), passcode: passcode, surname: $("surname").value, first: $("first").value, middle: $("middle").value,
       gender: $("gender").value, age: $("age").value, level: $("level").value, school: $("school").value,
