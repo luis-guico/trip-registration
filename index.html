@@ -108,7 +108,14 @@
 
   // WHEN HOSTED OUTSIDE GOOGLE: paste your Apps Script web app URL (ends in /exec) between the quotes.
   // Inside Apps Script this is ignored.
-  var API_URL = "https://script.google.com/macros/s/AKfycbzL_Cdb9TeqdEr3J9jt8q8GAfNdPmXCT4fP6ytaWvYMYgKQyZlSODq-lrtpqKz9EZPKsA/";
+  var API_URL = "https://script.google.com/macros/s/AKfycbzL_Cdb9TeqdEr3J9jt8q8GAfNdPmXCT4fP6ytaWvYMYgKQyZlSODq-lrtpqKz9EZPKsA/exec";
+  // forgiving: removes /u/1/, trailing slashes, a doubled /exec/exec, and adds /exec if it is missing
+  function normUrl(u) {
+    u = (u || "").trim().replace(/[?#].*$/, "").replace(/\/u\/\d+\//, "/").replace(/\/+$/, "").replace(/(\/exec)+$/, "/exec");
+    if (u && !/\/exec$/.test(u)) u += "/exec";
+    return u;
+  }
+  API_URL = normUrl(API_URL);
   var IN_GAS = !!(window.google && google.script && google.script.run);
 
   function newReqId() {
@@ -127,10 +134,17 @@
       return r.submitRegistration(payload);
     }
     if (!API_URL) return onFail(new Error("API_URL is not set"));
+    // 1st try: normal fetch. If the browser blocks it (CORS, network quirks), 2nd try: JSONP (script tag).
+    // Safe for submits: the same requestId is used, so the server returns the same ID instead of a second one.
+    viaFetch(action, payload, onOk, function () { viaJsonp(action, payload, onOk, onFail); });
+  }
+
+  function viaFetch(action, payload, onOk, onFail) {
+    if (!window.fetch) return onFail(new Error("no fetch"));
     var ctl = window.AbortController ? new AbortController() : null;
-    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 40000);
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 25000);
     var isGet = action === "options";
-    fetch(isGet ? API_URL + (API_URL.indexOf("?") < 0 ? "?" : "&") + "action=options" : API_URL, {
+    fetch(isGet ? API_URL + "?action=options" : API_URL, {
       method: isGet ? "GET" : "POST",
       // text/plain keeps this a "simple" request, so the browser sends no CORS preflight
       headers: isGet ? {} : { "Content-Type": "text/plain;charset=utf-8" },
@@ -140,6 +154,25 @@
       .then(function (res) { return res.json(); })
       .then(function (j) { clearTimeout(timer); onOk(j); })
       .catch(function (e) { clearTimeout(timer); onFail(e); });
+  }
+
+  function viaJsonp(action, payload, onOk, onFail) {
+    var cb = "__trip_" + Math.random().toString(36).slice(2), done = false, t;
+    var s = document.createElement("script");
+    function finish(fn, arg) {
+      if (done) return; done = true; clearTimeout(t);
+      try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+      if (s.parentNode) s.parentNode.removeChild(s);
+      fn(arg);
+    }
+    window[cb] = function (j) { finish(onOk, j); };
+    var q = "action=" + encodeURIComponent(action) + "&callback=" + cb;
+    if (action === "submit") q += "&data=" + encodeURIComponent(JSON.stringify(payload));
+    if (action === "checkPasscode") q += "&code=" + encodeURIComponent(payload.code);
+    s.onerror = function () { finish(onFail, new Error("jsonp failed")); };
+    t = setTimeout(function () { finish(onFail, new Error("jsonp timeout")); }, 25000);
+    s.src = API_URL + "?" + q;
+    document.head.appendChild(s);
   }
 
   function loadOptions(n) {
